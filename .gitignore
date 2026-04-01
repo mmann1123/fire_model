@@ -1,0 +1,21 @@
+# Data and model outputs (large files, not tracked in git)
+outputs/
+snapshots/
+data/predictions/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
