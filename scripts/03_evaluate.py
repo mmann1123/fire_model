@@ -2,11 +2,14 @@
 
 Usage:
     conda run -n deep_field python scripts/03_evaluate.py
+    conda run -n deep_field python scripts/03_evaluate.py --run-id v3-matched-ratio --notes "10:1 neg ratio"
 """
 
+import argparse
 import json
 import logging
 import pickle
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -816,7 +819,69 @@ def select_area_calibrated_threshold(maps_dir, fire_raster, time_index, valid_ma
     return best_thresh, diagnostics
 
 
+SNAPSHOT_DIR = Path((PROJECT_ROOT / cfg["paths"]["snapshot_dir"]).resolve())
+
+
+def create_snapshot(run_id, notes, git_hash):
+    """Create a frozen snapshot of current outputs."""
+    snap_dir = SNAPSHOT_DIR / run_id
+    if snap_dir.exists():
+        logger.warning(f"Overwriting existing snapshot: {snap_dir}")
+        shutil.rmtree(snap_dir)
+
+    snap_dir.mkdir(parents=True)
+    logger.info(f"Creating snapshot: {snap_dir}")
+
+    # Copy config
+    shutil.copy2(PROJECT_ROOT / "config.yaml", snap_dir / "config.yaml")
+
+    # Copy models
+    for track in ["trackA", "trackB"]:
+        model_src = OUTPUT_DIR / "model" / track
+        if model_src.exists():
+            model_dst = snap_dir / "model" / track
+            model_dst.mkdir(parents=True)
+            for f in model_src.iterdir():
+                shutil.copy2(f, model_dst / f.name)
+
+    # Copy evaluation, comparison, spatial_maps
+    for subdir in ["evaluation", "comparison", "spatial_maps"]:
+        src = OUTPUT_DIR / subdir
+        if src.exists():
+            shutil.copytree(src, snap_dir / subdir)
+
+    # Copy and augment manifest
+    manifest_src = OUTPUT_DIR / "manifest.json"
+    manifest = {}
+    if manifest_src.exists():
+        with open(manifest_src) as f:
+            manifest = json.load(f)
+
+    manifest["snapshot"] = {
+        "run_id": run_id,
+        "notes": notes,
+        "git_hash": git_hash,
+    }
+    with open(snap_dir / "manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    n_files = sum(1 for _ in snap_dir.rglob("*") if _.is_file())
+    total_mb = sum(f.stat().st_size for f in snap_dir.rglob("*") if f.is_file()) / 1e6
+    logger.info(f"Snapshot created: {n_files} files, {total_mb:.1f} MB")
+    logger.info(f"  Run ID: {run_id}")
+    if "trackA_overall_auc" in manifest:
+        logger.info(f"  AUC-A: {manifest['trackA_overall_auc']:.4f}, "
+                     f"AUC-B: {manifest['trackB_overall_auc']:.4f}, "
+                     f"Delta: {manifest['auc_delta']:+.4f}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Evaluate fire models")
+    parser.add_argument("--run-id", default=None,
+                        help="If provided, auto-create snapshot with this ID after evaluation")
+    parser.add_argument("--notes", default="", help="Notes for snapshot")
+    args = parser.parse_args()
+
     logger.info("Loading panel...")
     df = pd.read_parquet(PANEL_PATH)
     df_test = df[df["split"] == "test"].copy()
@@ -1062,8 +1127,7 @@ def main():
         "train_period": f"{cfg['temporal']['fire_start']} to {cfg['temporal']['train_end']}",
         "calib_period": f"{cfg['temporal']['train_end'][:5]}01 to {cfg['temporal']['calib_end']}",
         "test_period": f"{cfg['temporal']['calib_end'][:5]}10 to 2024-09",
-        "neg_grid_spacing_km": cfg["sampling"]["neg_grid_spacing"],
-        "random_seed": cfg["sampling"]["seed"],
+        "sampling": cfg["sampling"],
         "feature_cols": TRACK_A_FEATURES,
         "n_train_pos": int(df[df["split"] == "train"]["fire"].sum()),
         "n_train_neg": int((df["split"] == "train").sum() - df[df["split"] == "train"]["fire"].sum()),
@@ -1082,6 +1146,11 @@ def main():
         json.dump(manifest, f, indent=2)
 
     logger.info(f"Manifest saved to {OUTPUT_DIR / 'manifest.json'}")
+
+    # Auto-create snapshot if --run-id provided
+    if args.run_id:
+        create_snapshot(args.run_id, args.notes, git_hash)
+
     logger.info("Evaluation complete.")
 
 

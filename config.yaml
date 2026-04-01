@@ -43,9 +43,18 @@ temporal:
   calib_end: "2019-09"
 
 sampling:
-  neg_grid_spacing: 5
-  min_fire_acres: 300
   seed: 42
+  min_fire_acres: 300
+  strategy: grid_thin
+  grid_thin:
+    neg_grid_spacing: 5
+  matched_ratio:
+    target_ratio: 10         # negatives per positive
+  temporal_thin:
+    neg_grid_spacing: 5
+    month_step: 3            # keep every Nth month for negatives
+  random_subsample:
+    fraction: 0.01           # fraction of all valid negative pixel-months
 
 model:
   type: logistic_regression

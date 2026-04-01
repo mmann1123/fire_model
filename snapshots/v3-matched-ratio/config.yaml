@@ -1,0 +1,102 @@
+# Fire Model Configuration
+
+paths:
+  zarr_store: /home/mmann1123/extra_space/bcm_emulator/data/bcm_dataset.zarr
+  frap_gdb: /home/mmann1123/extra_space/Fires/fire24_1.gdb
+  frap_layer: firep24_1
+  rxburn_layer: rxburn24_1
+  ecoregion_tif: /home/mmann1123/extra_space/Regions/ca_eco_l3.tif
+  fveg_map: /home/mmann1123/extra_space/bcm_emulator/data/fveg/fveg_class_map.json
+  fveg_vat: /home/mmann1123/extra_space/fveg/fveg_vat.csv
+  tsf_raster_dir: /home/mmann1123/extra_space/Fires/TimeSinceFire_Raster
+  sergom_dir: /home/mmann1123/extra_space/SERGOM_Housing/Interpolated_New
+  predictions_dir: data/predictions
+  output_dir: outputs
+  snapshot_dir: snapshots
+
+infrastructure:
+  dist_campground:
+    path: /home/mmann1123/extra_space/Campgrounds/dist_campground.tif
+    scale: 0.001  # m -> km
+  dist_transmission:
+    path: /home/mmann1123/extra_space/Electrical/transmissionLines_Dist.tif
+    scale: 1.0
+  dist_airbase:
+    path: "/home/mmann1123/extra_space/Fire Stations/AirBaseDist_Meters.tif"
+    scale: 0.001  # m -> km
+  dist_firestation:
+    path: "/home/mmann1123/extra_space/Fire Stations/FireStatDist_Meters.tif"
+    scale: 0.001  # m -> km
+  dist_road:
+    path: /home/mmann1123/extra_space/Roads/PrimSecRoads_Dist_km.tif
+    scale: 1.0
+
+grid:
+  height: 1209
+  width: 941
+  epsg: 3310
+  transform: [1000.0, 0.0, -374495.8364, 0.0, -1000.0, 592636.6658]  # Affine coefficients
+
+temporal:
+  fire_start: "1984-01"
+  train_end: "2016-12"
+  calib_end: "2019-09"
+
+sampling:
+  seed: 42
+  min_fire_acres: 300
+  strategy: matched_ratio
+  grid_thin:
+    neg_grid_spacing: 5
+  matched_ratio:
+    target_ratio: 10         # negatives per positive
+  temporal_thin:
+    neg_grid_spacing: 5
+    month_step: 3            # keep every Nth month for negatives
+  random_subsample:
+    fraction: 0.01           # fraction of all valid negative pixel-months
+
+model:
+  type: logistic_regression
+  C: 1.0
+  class_weight: balanced
+  max_iter: 2000
+  solver: lbfgs
+
+features:
+  common:
+    - ppt
+    - tmin
+    - tmax
+    - vpd
+    - srad
+    - kbdi
+    - sws
+    - vpd_roll6_std
+    - month_sin
+    - month_cos
+    - fire_season
+    - elev
+    - aridity_index
+    - windward_index
+    - fveg_forest
+    - fveg_shrub
+    - fveg_herb
+    - tsf_years
+    - tsf_log
+    - tst_broadcast_years
+    - tst_mechanical_years
+    - any_treatment_5yr
+    - dist_campground_km
+    - dist_transmission_km
+    - dist_airbase_km
+    - dist_firestation_km
+    - dist_road_km
+    - housing_density
+    - log_housing_density
+  track_specific:
+    - cwd_anom
+    - aet_anom
+    - pet_anom
+    - cwd_cum3_anom
+    - cwd_cum6_anom

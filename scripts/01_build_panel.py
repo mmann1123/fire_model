@@ -65,7 +65,6 @@ tx = cfg["grid"]["transform"]
 TRANSFORM = Affine(tx[0], tx[1], tx[2], tx[3], tx[4], tx[5])
 
 # Sampling
-NEG_GRID_SPACING = cfg["sampling"]["neg_grid_spacing"]
 MIN_ACRES = cfg["sampling"]["min_fire_acres"]
 SEED = cfg["sampling"]["seed"]
 
@@ -517,37 +516,11 @@ def main():
     # ---- 1c. Sampling ----
     logger.info("Sampling pixel-months...")
 
-    # Positive samples: all burned pixel-months
-    pos_t, pos_r, pos_c = np.where((fire_raster == 1) & valid_mask[np.newaxis, :, :])
-    n_pos = len(pos_t)
-    logger.info(f"Positive samples: {n_pos}")
+    from src.fire_model.sampling import sample_panel
 
-    # Negative samples: spatially thinned grid, all non-fire months
-    neg_rows = np.arange(0, H, NEG_GRID_SPACING)
-    neg_cols = np.arange(0, W, NEG_GRID_SPACING)
-    neg_rr, neg_cc = np.meshgrid(neg_rows, neg_cols, indexing="ij")
-    neg_rr, neg_cc = neg_rr.ravel(), neg_cc.ravel()
-
-    # Filter to valid pixels
-    neg_valid = valid_mask[neg_rr, neg_cc]
-    neg_rr = neg_rr[neg_valid]
-    neg_cc = neg_cc[neg_valid]
-    n_neg_pixels = len(neg_rr)
-    logger.info(f"Negative grid: {n_neg_pixels} pixels (every {NEG_GRID_SPACING}th)")
-
-    # All non-fire months for negative pixels
-    neg_fire_subset = fire_raster[:, neg_rr, neg_cc]  # (T_fire, n_neg_pixels)
-    neg_t_list, neg_p_list = np.where(neg_fire_subset == 0)
-    neg_r_list = neg_rr[neg_p_list]
-    neg_c_list = neg_cc[neg_p_list]
-    n_neg = len(neg_t_list)
-    logger.info(f"Negative samples: {n_neg}")
-
-    # Combine
-    all_t = np.concatenate([pos_t, neg_t_list])
-    all_r = np.concatenate([pos_r, neg_r_list])
-    all_c = np.concatenate([pos_c, neg_c_list])
-    all_fire = np.concatenate([np.ones(n_pos, dtype=np.int8), np.zeros(n_neg, dtype=np.int8)])
+    all_t, all_r, all_c, all_fire = sample_panel(fire_raster, valid_mask, cfg["sampling"])
+    n_pos = int(all_fire.sum())
+    n_neg = len(all_fire) - n_pos
 
     # Convert local t (within fire period) to year/month
     all_ym = time_index_fire[all_t]
