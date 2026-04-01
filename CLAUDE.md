@@ -103,8 +103,10 @@ Use `docs/model_comparison.md` to track experiments across runs.
 ## Current Status
 
 Best run: **v1-baseline** — Logistic regression, all features, 300-acre min.
-- Overall AUC: Track A 0.9139, Track B 0.9131, Delta +0.0008
-- Fire Season AUC: Track B outperforms (+0.0022)
+- Overall AUC: Track A 0.9226, Track B 0.9207, Delta +0.0019
+- Fire Season AUC: Track A 0.8583, Track B 0.8573, Delta +0.0011
+- Emulator outperforms BCMv8 in WY2021 (-0.024), WY2022 (-0.017), WY2024 (-0.005)
+- Top features: tmax (+0.393 perm imp), vpd (+0.057), dist_airbase (+0.043), sws (+0.043)
 - Conclusion: Emulator is operationally viable for fire prediction
 
 ## Development Practices

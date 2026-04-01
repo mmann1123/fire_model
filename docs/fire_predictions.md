@@ -2,7 +2,7 @@
 
 ## Summary
 
-A baseline logistic regression model predicting monthly wildfire ignition probability at 1 km resolution across California demonstrates that replacing BCMv8 ground-truth hydrology with BCM emulator predictions has negligible impact on downstream fire prediction skill. The overall ROC-AUC degradation is **+0.0008** (0.9139 vs 0.9131), well below the 0.02 operational viability threshold. During the fire season (Jun-Nov), the emulator slightly *outperforms* BCMv8 (AUC 0.8454 vs 0.8432). These results validate the BCM emulator for operational wildfire risk forecasting.
+A baseline logistic regression model predicting monthly wildfire ignition probability at 1 km resolution across California demonstrates that replacing BCMv8 ground-truth hydrology with BCM emulator predictions has negligible impact on downstream fire prediction skill. The overall ROC-AUC degradation is **+0.0019** (0.9226 vs 0.9207), well below the 0.02 operational viability threshold. During the fire season (Jun-Nov), Track A slightly outperforms Track B (AUC 0.8583 vs 0.8573, delta +0.0011). The emulator outperforms BCMv8 in 3 of 5 water years (WY2021, WY2022, WY2024). These results validate the BCM emulator for operational wildfire risk forecasting.
 
 ## Experimental Design
 
@@ -93,24 +93,24 @@ TSF is initialized from the FRAP-derived `timeSinceFire_1983.tif` raster (years 
 
 | Metric | Track A (BCMv8) | Track B (Emulator) | Delta |
 |--------|----------------:|-------------------:|------:|
-| **ROC-AUC** | **0.9139** | **0.9131** | **+0.0008** |
-| Average Precision | 0.2345 | 0.2292 | +0.0053 |
-| Brier Score | 0.0312 | 0.0311 | +0.0001 |
-| Fire Season ROC-AUC | 0.8432 | 0.8454 | -0.0022 |
+| **ROC-AUC** | **0.9226** | **0.9207** | **+0.0019** |
+| Average Precision | 0.2492 | 0.2464 | +0.0029 |
+| Brier Score | 0.0307 | 0.0305 | +0.0001 |
+| Fire Season ROC-AUC | 0.8583 | 0.8573 | +0.0011 |
 
-The AUC delta of +0.0008 means the emulator's hydrologic prediction errors contribute less than 0.1% degradation to fire prediction skill.
+The AUC delta of +0.0019 means the emulator's hydrologic prediction errors contribute less than 0.2% degradation to fire prediction skill.
 
 ### By Water Year
 
 | Water Year | Track A AUC | Track B AUC | Delta | Test Fires | Prevalence |
 |:----------:|:-----------:|:-----------:|:-----:|:----------:|:----------:|
-| WY2020 | 0.922 | 0.915 | +0.007 | 21,066 | 8.4% |
-| WY2021 | 0.878 | 0.908 | -0.030 | 12,560 | 5.2% |
-| WY2022 | 0.845 | 0.859 | -0.014 | 1,896 | 0.8% |
-| WY2023 | 0.916 | 0.904 | +0.012 | 2,053 | 0.9% |
-| WY2024 | 0.902 | 0.913 | -0.011 | 5,374 | 2.3% |
+| WY2020 | 0.928 | 0.920 | +0.007 | 21,066 | 8.4% |
+| WY2021 | 0.899 | 0.923 | -0.024 | 12,560 | 5.2% |
+| WY2022 | 0.838 | 0.855 | -0.017 | 1,896 | 0.8% |
+| WY2023 | 0.894 | 0.888 | +0.006 | 2,053 | 0.9% |
+| WY2024 | 0.921 | 0.927 | -0.005 | 5,374 | 2.3% |
 
-The emulator outperforms BCMv8 in three of five water years (WY2021, WY2022, WY2024). WY2021, the year with the largest delta (-0.030 in the emulator's favor), includes the Dixie Fire — the largest single fire in California history. The emulator's drought signal may better capture the cumulative moisture deficit leading up to that event.
+The emulator outperforms BCMv8 in three of five water years (WY2021, WY2022, WY2024). WY2021, the year with the largest delta (-0.024 in the emulator's favor), includes the Dixie Fire — the largest single fire in California history. The emulator's drought signal may better capture the cumulative moisture deficit leading up to that event.
 
 ### By Month
 
@@ -118,10 +118,10 @@ Peak fire months (Jul–Sep) show strong discrimination in both tracks:
 
 | Month | Track A AUC | Fires | Prevalence |
 |:-----:|:-----------:|:-----:|:----------:|
-| Jul | 0.741 | 14,466 | 13.1% |
-| Aug | 0.809 | 18,279 | 16.1% |
-| Sep | 0.834 | 6,961 | 6.8% |
-| Oct | 0.774 | 1,089 | 1.1% |
+| Jul | 0.763 | 14,466 | 13.1% |
+| Aug | 0.807 | 18,279 | 16.1% |
+| Sep | 0.853 | 6,961 | 6.8% |
+| Oct | 0.813 | 1,089 | 1.1% |
 
 Winter months (Nov–Apr) have near-zero fire prevalence and AUC values are not meaningful.
 
@@ -131,20 +131,22 @@ Top 10 features by absolute logistic regression coefficient (Track A):
 
 | Rank | Feature | Coefficient | Odds Ratio | Interpretation |
 |:----:|---------|:----------:|:----------:|----------------|
-| 1 | Tmax | +4.78 | 118.7 | Hotter months strongly increase fire probability |
-| 2 | VPD | -1.95 | 0.14 | High VPD correlated with tmax; negative after controlling for tmax |
-| 3 | Tmin | -1.63 | 0.20 | Cool nights reduce fire spread (higher humidity recovery) |
-| 4 | SWS | -1.24 | 0.29 | Wetter soil = less fire |
-| 5 | KBDI | -1.17 | 0.31 | Collinear with tmax/vpd; sign reflects partial correlation |
-| 6 | TSF years | -0.84 | 0.43 | Combined with TSF log: non-monotonic fuel effect |
-| 7 | Month sin | -0.82 | 0.44 | Seasonal pattern encoding |
-| 8 | Month cos | -0.57 | 0.57 | Seasonal pattern encoding |
-| 9 | TSF log | +0.49 | 1.63 | Fuel accumulation increases fire risk (log-diminishing) |
-| 10 | SRAD | -0.48 | 0.62 | After controlling for temperature, radiation is collinear |
+| 1 | Tmax | +4.10 | 60.4 | Hotter months strongly increase fire probability |
+| 2 | VPD | -1.70 | 0.18 | High VPD correlated with tmax; negative after controlling for tmax |
+| 3 | Tmin | -1.31 | 0.27 | Cool nights reduce fire spread (higher humidity recovery) |
+| 4 | SWS | -1.21 | 0.30 | Wetter soil = less fire |
+| 5 | Dist airbase | -1.16 | 0.31 | Proximity to air tanker bases increases suppression effectiveness |
+| 6 | KBDI | -0.76 | 0.47 | Collinear with tmax/vpd; sign reflects partial correlation |
+| 7 | Month sin | -0.65 | 0.52 | Seasonal pattern encoding |
+| 8 | Dist campground | -0.64 | 0.53 | Proximity to campgrounds associated with ignition risk |
+| 9 | TSF years | -0.63 | 0.53 | Combined with TSF log: non-monotonic fuel effect |
+| 10 | Month cos | -0.62 | 0.54 | Seasonal pattern encoding |
 
-The TSF features jointly model a non-monotonic relationship: fire risk increases with fuel accumulation but at a diminishing rate. The negative linear term (TSF years) combined with the positive log term (TSF log) creates an inverted-U shape that peaks around 15-20 years.
+The TSF features jointly model a non-monotonic relationship: fire risk increases with fuel accumulation but at a diminishing rate. The negative linear term (TSF years, -0.63) combined with the positive log term (TSF log, +0.38) creates an inverted-U shape that peaks around 15-20 years.
 
-CWD anomaly features (ranks 18-21) have modest coefficients (+0.04 to +0.14), reflecting that the drought signal is largely captured by the collinear KBDI and SWS features. The 6-month cumulative CWD anomaly (+0.14) is larger than the single-month anomaly (+0.04), consistent with multi-month drought accumulation driving fire risk.
+Infrastructure distance features are now prominent: dist_airbase (#5, -1.16) and dist_campground (#8, -0.64) reflect both suppression capacity and human ignition sources. CWD anomaly features have modest coefficients, reflecting that the drought signal is largely captured by the collinear KBDI and SWS features.
+
+**Permutation importance** (AUC decrease when feature is shuffled) shows a clearer picture of feature utility: tmax (+0.393) dominates, followed by vpd (+0.057), dist_airbase (+0.043), sws (+0.043), tsf_years (+0.032), and tmin (+0.032).
 
 ## Interpretation
 
@@ -160,7 +162,7 @@ The emulator's v19a-extended evaluation showed AET pbias +11.6% and CWD NSE 0.91
 
 ### Emulator Outperformance in WY2021
 
-The emulator achieves AUC 0.908 vs BCMv8's 0.878 in WY2021 (Dixie Fire year). This suggests the emulator's drought signal — which captures the cumulative effect of the 2020-2021 hot drought through its learned representations — may provide a more informative predictor than BCMv8's process-based calculations for extreme multi-year drought events that push vegetation beyond normal operating ranges.
+The emulator achieves AUC 0.923 vs BCMv8's 0.899 in WY2021 (Dixie Fire year). This suggests the emulator's drought signal — which captures the cumulative effect of the 2020-2021 hot drought through its learned representations — may provide a more informative predictor than BCMv8's process-based calculations for extreme multi-year drought events that push vegetation beyond normal operating ranges.
 
 ### Model Limitations
 
