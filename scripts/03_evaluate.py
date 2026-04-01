@@ -863,9 +863,12 @@ def main():
     _make_importance_comparison(imp_a, imp_b, eval_dir / "importance_comparison.png")
 
     # Spatial maps (full grid prediction, not just panel samples)
+    # Generate for both test (WY2020-2024) and calib (WY2018-2019) periods
     maps_dir = OUTPUT_DIR / "spatial_maps"
-    save_spatial_maps(model_a_path, TRACK_A_FEATURES, "_a", maps_dir / "trackA")
-    save_spatial_maps(model_b_path, TRACK_B_FEATURES, "_b", maps_dir / "trackB")
+    save_spatial_maps(model_a_path, TRACK_A_FEATURES, "_a", maps_dir / "trackA",
+                      wy_range=range(2018, 2025))
+    save_spatial_maps(model_b_path, TRACK_B_FEATURES, "_b", maps_dir / "trackB",
+                      wy_range=range(2018, 2025))
 
     # ---- Comparison summary ----
     summary_rows = []
@@ -920,7 +923,13 @@ def main():
     comp_dir = OUTPUT_DIR / "comparison"
     comp_dir.mkdir(exist_ok=True)
 
-    # Calibrate threshold on calib period
+    # Load actual fire data
+    fire_raster = np.load(str(OUTPUT_DIR / "fire_raster.npy"), mmap_mode="r")
+    store_meta = zarr.open_group(ZARR_PATH, mode="r")
+    time_index_full = np.array(store_meta["meta/time"])
+    valid_mask = np.array(store_meta["meta/valid_mask"])
+
+    # ---- Threshold 1: Rate-matching (original approach) ----
     df_calib = df[df["split"] == "calib"]
     X_calib_a = df_calib[TRACK_A_FEATURES].values
     y_calib = df_calib["fire"].values
@@ -928,20 +937,22 @@ def main():
         model_for_thresh = pickle.load(f)
     y_calib_prob = model_for_thresh.predict_proba(X_calib_a)[:, 1]
     actual_rate = y_calib.mean()
-    threshold = 0.05
+    threshold_rate = 0.05
     best_diff = float("inf")
     for t in np.arange(0.001, 0.20, 0.001):
         if abs((y_calib_prob >= t).mean() - actual_rate) < best_diff:
             best_diff = abs((y_calib_prob >= t).mean() - actual_rate)
-            threshold = t
-    logger.info(f"  Calibrated threshold: {threshold:.3f}")
+            threshold_rate = t
+    logger.info(f"  Rate-matching threshold: {threshold_rate:.3f}")
 
-    # Load actual fire data by WY
-    fire_raster = np.load(str(OUTPUT_DIR / "fire_raster.npy"), mmap_mode="r")
-    store_meta = zarr.open_group(ZARR_PATH, mode="r")
-    time_index_full = np.array(store_meta["meta/time"])
-    valid_mask = np.array(store_meta["meta/valid_mask"])
+    # ---- Threshold 2: Area-calibrated (Experiment 2) ----
+    logger.info("  Computing area-calibrated threshold from WY2018-2019 spatial maps...")
+    threshold_area, area_diag = select_area_calibrated_threshold(
+        maps_dir, fire_raster, time_index_full, valid_mask,
+        wy_range=range(2018, 2020), track="trackA",
+    )
 
+    # Compute actual burned area for test WYs
     wy_burned = {}
     for wy in range(2020, 2025):
         burned = np.zeros((H, W), dtype=bool)
@@ -958,45 +969,73 @@ def main():
         burned &= valid_mask
         wy_burned[wy] = burned
 
-    area_data = {}
-    for track, track_label in [("trackA", "Track A (BCMv8)"), ("trackB", "Track B (Emulator)")]:
-        for wy in range(2020, 2025):
-            tif_path = maps_dir / track / f"fire_prob_WY{wy}_fire_season.tif"
-            if not tif_path.exists():
-                continue
-            with rasterio.open(str(tif_path)) as src:
-                prob_map = src.read(1)
-            prob_map[prob_map == -9999.0] = 0.0
+    # Generate comparison data for BOTH thresholds
+    for thresh_name, threshold in [("rate_match", threshold_rate),
+                                    ("area_calib", threshold_area)]:
+        area_data = {}
+        for track, track_label in [("trackA", "Track A (BCMv8)"),
+                                    ("trackB", "Track B (Emulator)")]:
+            for wy in range(2020, 2025):
+                tif_path = maps_dir / track / f"fire_prob_WY{wy}_fire_season.tif"
+                if not tif_path.exists():
+                    continue
+                with rasterio.open(str(tif_path)) as src:
+                    prob_map = src.read(1)
+                prob_map[prob_map == -9999.0] = 0.0
 
-            burned_mask = wy_burned[wy]
-            actual_km2 = int(burned_mask.sum())
-            predicted_km2 = int(((prob_map >= threshold) & valid_mask).sum())
+                burned_mask = wy_burned[wy]
+                actual_km2 = int(burned_mask.sum())
+                predicted_km2 = int(((prob_map >= threshold) & valid_mask).sum())
 
-            if wy not in area_data:
-                area_data[wy] = {"actual_km2": actual_km2}
-            area_data[wy][f"predicted_km2_{track}"] = predicted_km2
+                if wy not in area_data:
+                    area_data[wy] = {"actual_km2": actual_km2}
+                area_data[wy][f"predicted_km2_{track}"] = predicted_km2
 
-            # Side-by-side comparison figure
-            _make_comparison_figure(wy, prob_map, burned_mask, valid_mask,
-                                   threshold, track_label,
-                                   comp_dir / f"{track}_WY{wy}_comparison.png")
+                # Side-by-side comparison figure
+                _make_comparison_figure(wy, prob_map, burned_mask, valid_mask,
+                                       threshold, track_label,
+                                       comp_dir / f"{track}_WY{wy}_{thresh_name}.png")
 
-    # Burned area bar chart
-    _make_area_chart(area_data, threshold, comp_dir / "burned_area_comparison.png")
+        # Burned area bar chart
+        _make_area_chart(area_data, threshold,
+                         comp_dir / f"burned_area_{thresh_name}.png")
 
-    # Save area CSV
-    area_rows = [{"water_year": wy, **area_data[wy]} for wy in sorted(area_data.keys())]
-    pd.DataFrame(area_rows).to_csv(comp_dir / "burned_area_comparison.csv", index=False)
+        # Save area CSV
+        area_rows = [{"water_year": wy, **area_data[wy]}
+                     for wy in sorted(area_data.keys())]
+        pd.DataFrame(area_rows).to_csv(
+            comp_dir / f"burned_area_{thresh_name}.csv", index=False)
 
-    # Print burned area table
-    print(f"\nBURNED AREA COMPARISON (threshold={threshold:.3f})")
-    print(f"{'WY':<8} {'Actual':>10} {'BCMv8':>10} {'Emulator':>10}")
-    print("-" * 42)
-    for wy in sorted(area_data.keys()):
-        d = area_data[wy]
-        print(f"WY{wy}  {d['actual_km2']:>10,} "
-              f"{d.get('predicted_km2_trackA', 0):>10,} "
-              f"{d.get('predicted_km2_trackB', 0):>10,}")
+        # Print burned area table
+        label = "RATE-MATCHING" if thresh_name == "rate_match" else "AREA-CALIBRATED"
+        print(f"\nBURNED AREA — {label} THRESHOLD ({threshold:.3f})")
+        print(f"{'WY':<8} {'Actual':>10} {'BCMv8':>10} {'Emulator':>10}")
+        print("-" * 42)
+        total_actual = total_pred_a = total_pred_b = 0
+        for wy in sorted(area_data.keys()):
+            d = area_data[wy]
+            a = d['actual_km2']
+            pa = d.get('predicted_km2_trackA', 0)
+            pb = d.get('predicted_km2_trackB', 0)
+            total_actual += a
+            total_pred_a += pa
+            total_pred_b += pb
+            print(f"WY{wy}  {a:>10,} {pa:>10,} {pb:>10,}")
+        print("-" * 42)
+        print(f"{'Total':<8} {total_actual:>10,} {total_pred_a:>10,} {total_pred_b:>10,}")
+        if total_actual > 0:
+            ratio_a = total_pred_a / total_actual
+            ratio_b = total_pred_b / total_actual
+            print(f"{'Ratio':<8} {'1.00':>10s} {ratio_a:>10.2f} {ratio_b:>10.2f}")
+
+    # Save threshold comparison summary
+    thresh_summary = {
+        "rate_match_threshold": float(threshold_rate),
+        "area_calib_threshold": float(threshold_area),
+        "area_calib_wy_range": "WY2018-WY2019",
+    }
+    with open(comp_dir / "threshold_comparison.json", "w") as f:
+        json.dump(thresh_summary, f, indent=2)
 
     # ---- Manifest ----
     git_hash = "unknown"
@@ -1034,6 +1073,8 @@ def main():
         "trackA_overall_auc": results_a["overall"]["roc_auc"],
         "trackB_overall_auc": results_b["overall"]["roc_auc"],
         "auc_delta": delta_auc,
+        "threshold_rate_match": float(threshold_rate),
+        "threshold_area_calib": float(threshold_area),
         **tsf_coefs,
     }
 
