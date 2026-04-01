@@ -1,6 +1,5 @@
 # Data and model outputs (large files, not tracked in git)
 outputs/
-snapshots/
 data/predictions/
 
 # Python
