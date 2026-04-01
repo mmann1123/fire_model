@@ -30,22 +30,29 @@ cd /home/mmann1123/extra_space/fire_model
 # 1. Build panel — rasterize FRAP fires, compute TSF, extract features (~5 min)
 conda run -n deep_field python scripts/01_build_panel.py
 
-# 2. Train logistic regression for both tracks (~30 sec)
+# 2. Train model for both tracks
+#    Default (logistic regression, ~30 sec):
 conda run -n deep_field python scripts/02_train_model.py
+#    With model type override:
+conda run -n deep_field python scripts/02_train_model.py --model-type lightgbm
+#    With Optuna tuning:
+conda run -n deep_field python scripts/02_train_model.py --tune --n-trials 100
+#    Full example:
+conda run -n deep_field python scripts/02_train_model.py --model-type random_forest --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
 
 # 3. Evaluate — metrics, spatial maps, comparison figures (~5 min)
-conda run -n deep_field python scripts/03_evaluate.py
+conda run -n deep_field python scripts/03_evaluate.py --run-id v6-random-forest --notes "RF with Optuna tuning"
 
 # 4. Snapshot — freeze outputs for experiment tracking
-conda run -n deep_field python scripts/create_snapshot.py --run-id v1-baseline \
-    --notes "Logistic regression baseline, all features, 300-acre min"
+conda run -n deep_field python scripts/create_snapshot.py --run-id v6-random-forest \
+    --notes "RandomForest with Optuna tuning, matched_ratio sampling"
 ```
 
 All scripts read paths from `config.yaml`. Use `--force` to overwrite existing outputs.
 
 ## Architecture
 
-**Baseline logistic regression** predicting monthly wildfire ignition at 1km California pixels (EPSG:3310, 1209x941).
+**Modular fire probability model** predicting monthly wildfire ignition at 1km California pixels (EPSG:3310, 1209x941). Supports 6 model types via `src/fire_model/models.py`.
 
 ### Data Flow
 
@@ -84,9 +91,32 @@ Both tracks share all features except hydrology anomalies (CWD, AET, PET), which
 
 `FireProbabilityForecaster` generates monthly fire probability maps from BCM emulator outputs. Maintains TSF state (deterministic — no fire resets in forecast mode). Supports SERGOM housing density projections through 2099.
 
+## Model Types
+
+All models are wrapped in sklearn Pipelines so `model.predict_proba(X)[:, 1]` works identically in evaluation and forecasting. `FeatureTransformer` (for interaction features) is serialized inside the pipeline pickle.
+
+| Type | Description | Pipeline |
+|------|-------------|----------|
+| `logistic_regression` | Baseline LogReg | FeatureTransformer → StandardScaler → LogisticRegression |
+| `elasticnet_logreg` | ElasticNet with interaction features | FeatureTransformer → StandardScaler → SGDClassifier(elasticnet) |
+| `random_forest` | Random Forest | FeatureTransformer → RandomForestClassifier |
+| `lightgbm` | LightGBM (GPU) | FeatureTransformer → LGBMClassifier |
+| `tabnet` | TabNet (GPU) | FeatureTransformer → StandardScaler → TabNetWrapper |
+| `ecoregion_logreg` | Per-ecoregion LogReg | EcoregionClassifier (fits separate LogReg per L3 ecoregion) |
+
+Set model type in `config.yaml` under `model.type`, or override via `--model-type` CLI arg.
+
+### Optuna Tuning (src/fire_model/tuning.py)
+
+`--tune` enables Optuna hyperparameter search. Uses 3-fold stratified CV on the training split (1984-2016). Tree/neural models use a 20% stratified subsample for speed. The calibration split (2017-2019) is reserved for isotonic calibration only. Best params saved to `best_params.json`.
+
+### EcoregionClassifier
+
+Fits separate LogReg per L3 ecoregion. Ecoregions with <`min_pos_per_eco` positives fall back to the global model. Requires `pixel_indices` kwarg during predict_proba for spatial maps — handled automatically by `03_evaluate.py`.
+
 ## Configuration
 
-All settings live in `config.yaml`. Key sections: `paths` (data locations), `infrastructure` (distance rasters), `grid` (EPSG:3310 reference), `temporal` (train/test split dates), `sampling` (panel construction), `model` (logistic regression hyperparameters), `features` (feature lists).
+All settings live in `config.yaml`. Key sections: `paths` (data locations), `infrastructure` (distance rasters), `grid` (EPSG:3310 reference), `temporal` (train/test split dates), `sampling` (panel construction), `model` (model type + hyperparameters), `features` (feature lists).
 
 ## Snapshot System
 
@@ -115,6 +145,8 @@ Best run: **v1-baseline** — Logistic regression, all features, 300-acre min.
 - Feature order must match exactly between `02_train_model.py`, `03_evaluate.py`, and `forecast.py`.
 - When adding new features: update `config.yaml` feature lists, all three scripts, and `forecast.py`.
 - The panel stores raw feature values. Scaling is handled by `StandardScaler` inside the sklearn pipeline.
+- When adding new model types: add to `build_model()` in `models.py`, add search space in `tuning.py`, add config block in `config.yaml`.
+- **Primary success metric:** Track A-B Delta AUC, not raw AUC. Delta < 0.02 = emulator viable; 0.02-0.03 = marginal; > 0.03 = not viable for that model type.
 
 ## Dependencies on BCM Emulator
 

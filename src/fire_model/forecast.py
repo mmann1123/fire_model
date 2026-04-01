@@ -130,9 +130,21 @@ class FireProbabilityForecaster:
         with open(model_path, "rb") as f:
             self.model = pickle.load(f)
 
-        # Verify feature names match
+        # Verify feature names match (model-agnostic)
         base_model = self.model.estimator if hasattr(self.model, "estimator") else self.model
-        n_features = base_model["lr"].coef_.shape[1]
+        if hasattr(base_model, "n_features_in_"):
+            n_features = base_model.n_features_in_
+        elif hasattr(base_model, "named_steps"):
+            # Pipeline — check last step
+            clf = list(base_model.named_steps.values())[-1]
+            if hasattr(clf, "coef_"):
+                n_features = clf.coef_.shape[1]
+            elif hasattr(clf, "n_features_in_"):
+                n_features = clf.n_features_in_
+            else:
+                n_features = len(self.FEATURE_NAMES)
+        else:
+            n_features = len(self.FEATURE_NAMES)
         assert n_features == len(self.FEATURE_NAMES), (
             f"Model expects {n_features} features but forecaster has {len(self.FEATURE_NAMES)}. "
             f"Feature list mismatch between forecast.py and 02_train_model.py."

@@ -9,6 +9,7 @@
 | v3-matched-ratio | 2026-04-01 | LogReg | matched_ratio (10:1) | 1.6M (1:10) | 0.9234 | 0.9218 | +0.0017 | 6x smaller panel, AUC slightly improved. Fastest iteration. |
 | v4-temporal-thin | 2026-04-01 | LogReg | temporal_thin (5px, 3mo) | 3.3M (1:21) | 0.9253 | 0.9158 | +0.0095 | Highest AUC-A but largest A-B gap. |
 | v5-random-subsample | 2026-04-01 | LogReg | random_subsample (1%) | 2.5M (1:15) | 0.9221 | 0.9204 | +0.0017 | Spatially unbiased negatives, tight A-B gap. |
+| threshold-model | 2026-04-01 | Ridge | — (post-hoc on v3) | 36 WYs | — | — | — | Year-specific thresholds from climate indices. LOO R²=0.329. Informative negative: threshold nearly constant (~0.357±0.02), cannot capture 12x burned area range. |
 
 ## Key Findings
 
@@ -87,6 +88,7 @@
 | **Total** | **42,427** | **32,004** | **29,099** | **0.75** | **0.69** |
 
 - **Conclusion:** Matched ratio sampling produces the most compact panel with slightly improved AUC and the tightest emulator gap. Best candidate for rapid experimentation. Area predictions comparable to v2.
+- **Operational threshold:** Use the area-calibrated fixed threshold of **0.470** for any burned area predictions from the v3-matched-ratio model. **This threshold is specific to v3-matched-ratio** — it is a property of this model's probability scale (driven by the 10:1 neg:pos sampling ratio), not a transferable constant. If the model is retrained with different sampling, features, or calibration period, the threshold must be recomputed against calibration-period spatial maps (WY2017–2019).
 
 ### v4-temporal-thin (Sampling experiment: spatial + temporal thinning)
 - **Strategy:** Every 5th pixel spatially, every 3rd month temporally for negatives (3,136,450 neg / 147,353 pos, ratio 1:21).
@@ -144,6 +146,64 @@
 | **Total** | **42,427** | **32,770** | **32,066** | **0.77** | **0.76** |
 
 - **Conclusion:** Very similar to v3 in AUC performance. Spatially unbiased sampling avoids grid artifacts. Emulator burned area totals nearly match BCMv8 (0.76x vs 0.77x). Good default if spatial bias is a concern.
+
+### Year-Specific Threshold Model (Experiment: climate-driven threshold prediction)
+
+**Goal:** Predict the optimal burned-area threshold for each water year from antecedent climate indices, addressing the 12x range in annual burned area (1,703–20,670 km²) that no fixed threshold can capture.
+
+**Method:** (1) Generate full-grid spatial probability maps (GeoTIFFs) for all 36 training years (WY1984–2019) using `save_spatial_maps()` with Track A. (2) For each year, search thresholds 0.595→0.01 (high-to-low, preferring conservative thresholds) to find the threshold that minimizes the ratio error between predicted and actual burned pixels. (3) Fit Ridge regression models predicting optimal threshold from climate indices. (4) Evaluate on WY2020–2024 test period.
+
+**Bug fix (v2 of script):** The original `compute_optimal_thresholds()` used the spatially-thinned panel, where sampled pixel counts ≠ real burned area. Replaced with full-grid spatial probability maps for all training years.
+
+**Training threshold distribution (36 years, WY1984–2019):**
+- Range: 0.310–0.385 (extremely narrow, span = 0.075)
+- Mean: 0.357, Std: 0.020
+- Correlation(actual_area, optimal_threshold) = **-0.099** (weakly negative, nearly flat)
+
+The narrow range is the central finding: the fire probability model already encodes year-to-year climate variability in the probabilities themselves, so the optimal decision threshold barely changes across years.
+
+**Ridge regression models (LOO cross-validation):**
+
+| Model | Features | LOO R² | LOO MAE |
+|-------|----------|:------:|:-------:|
+| causal | cwd_anom, sws_may, pck_april_anom, tmax_jun_jul_anom | 0.329 | 0.0122 |
+| cwd_only | cwd_anom_wateryear | 0.330 | 0.0129 |
+| insseason | causal + kbdi_july | 0.288 | 0.0125 |
+
+`cwd_only` matches the full causal model (R² 0.330 vs 0.329), meaning additional features provide no incremental predictive power. Adding KBDI (in-season) actually degrades fit due to overfitting with the small sample (n=36).
+
+**Coefficient signs (causal model):**
+
+| Feature | Std Coef | Expected | Actual | Match |
+|---------|:--------:|----------|--------|:-----:|
+| cwd_anom_wateryear | +0.018 | negative | positive | REVERSED |
+| sws_may | +0.011 | positive | positive | OK |
+| pck_april_anom | -0.003 | positive | negative | REVERSED |
+| tmax_jun_jul_anom | +0.002 | negative | positive | REVERSED |
+
+Three of four coefficient signs are reversed from physical expectations, though all magnitudes are very small. The positive CWD coefficient is particularly counterintuitive: it suggests drier antecedent conditions → higher (more conservative) threshold → less predicted burned area. This may reflect that the probability model has already absorbed the drought signal, and in drought years the entire probability surface shifts up uniformly, so a slightly higher threshold still captures the burned area.
+
+**Test period burned area (WY2020–2024):**
+
+| WY | Actual (km²) | Year-specific (km²) | Ratio | Threshold |
+|:--:|:------:|:--------:|:-----:|:---------:|
+| 2020 | 20,670 | 7,335 | 0.35 | 0.356 |
+| 2021 | 12,023 | 16,017 | 1.33 | 0.363 |
+| 2022 | 1,703 | 11,392 | 6.69 | 0.353 |
+| 2023 | 2,071 | 6,209 | 3.00 | 0.323 |
+| 2024 | 5,250 | 8,227 | 1.57 | 0.344 |
+| **Total** | **41,717** | **49,180** | **1.18** | — |
+
+The year-specific thresholds cluster in a narrow band (0.323–0.363), producing predicted areas of 6,200–16,000 km² regardless of actual area (1,703–20,670 km²). The model predicts ~10,000 km²/year ± 5,000 for every year — it cannot distinguish record fire years from quiet ones.
+
+**Comparison against v3 area-calibrated threshold (0.470):** The fixed thresholds tested in the script (0.118, 0.130) are from v1/v2 and are inapplicable to v3's probability maps. The comparison showing 15–162x overprediction with fixed 0.118 reflects a model mismatch, not a meaningful baseline. The correct fixed comparison is v3's area-calibrated threshold of 0.470, which produces total ratio 0.69x (see v3-matched-ratio results above). The year-specific approach achieves 1.18x total ratio — closer to 1.0, but with extreme per-year variance (0.35x–6.69x) that is worse than the fixed 0.470's per-year range.
+
+**Conclusion — informative negative result:**
+1. The optimal threshold is nearly constant (~0.357 ± 0.02) across 36 years with a 12x range in burned area. This means the fire probability model already captures climate-driven fire risk variation in the probabilities, and the threshold is not where the year-to-year burned area signal lives.
+2. Climate indices explain ~33% of threshold variance (R² = 0.33), but the variance itself is tiny (std = 0.02) — the model is fitting noise in a narrow band.
+3. Reversed coefficient signs and identical R² between the 1-feature and 4-feature models confirm the signal is marginal.
+4. **The fundamental limitation is not the threshold but the probability-to-area translation.** A pixel-level ignition probability model cannot capture the stochastic fire spread process that determines whether 1,700 or 20,000 km² burns in a given year. The 12x range in annual area is driven by fire weather episodes, ignition timing, and suppression capacity — factors not in the probability model's feature set.
+5. **Recommendation:** Use the v3 area-calibrated fixed threshold (0.470) for operational burned area estimates. The year-specific approach does not improve reliability. Note: this threshold is specific to v3-matched-ratio — if the model is retrained with different sampling or features, recompute the threshold against calibration-period spatial maps (WY2017–2019). Further threshold tuning is unlikely to improve burned area predictions.
 
 ## Sampling Strategy Comparison
 

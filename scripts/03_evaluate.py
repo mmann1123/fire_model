@@ -113,7 +113,13 @@ def evaluate_track(df_test, features, model_path, track_name):
 
     X_test = df_test[features].values
     y_test = df_test["fire"].values
-    y_prob = model.predict_proba(X_test)[:, 1]
+    # Support ecoregion models that need pixel indices
+    if hasattr(model, "needs_pixel_indices") and "row" in df_test.columns:
+        y_prob = model.predict_proba(
+            X_test, pixel_indices=(df_test["row"].values, df_test["col"].values)
+        )[:, 1]
+    else:
+        y_prob = model.predict_proba(X_test)[:, 1]
 
     # Overall metrics
     overall = compute_metrics(y_test, y_prob)
@@ -509,7 +515,13 @@ def save_spatial_maps(model_path, features_list, track_suffix, track_dir,
                 cwd_cum3, cwd_cum6,
             ])
 
-            probs = model.predict_proba(X)[:, 1]
+            # Support ecoregion models that need pixel indices
+            if hasattr(model, "needs_pixel_indices"):
+                probs = model.predict_proba(
+                    X, pixel_indices=(valid_rows, valid_cols)
+                )[:, 1]
+            else:
+                probs = model.predict_proba(X)[:, 1]
             prob_sum += probs
             n_months += 1
 
