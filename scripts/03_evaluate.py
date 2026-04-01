@@ -260,7 +260,8 @@ def save_roc_comparison(y_true, prob_a, prob_b, path):
     plt.close(fig)
 
 
-def save_spatial_maps(model_path, features_list, track_suffix, track_dir):
+def save_spatial_maps(model_path, features_list, track_suffix, track_dir,
+                      wy_range=range(2020, 2025)):
     """Save full-grid fire probability GeoTIFFs for each water year fire season.
 
     Predicts on ALL valid pixels (not just sampled panel), so the output
@@ -404,7 +405,7 @@ def save_spatial_maps(model_path, features_list, track_suffix, track_dir):
 
     ym_to_zarr_idx = {ym: i for i, ym in enumerate(time_index)}
 
-    for wy_val in tqdm(range(2020, 2025), desc="Spatial maps (full grid)"):
+    for wy_val in tqdm(wy_range, desc="Spatial maps (full grid)"):
         # Months in this WY's fire season
         wy_months = []
         for m in [10, 11]:  # Oct, Nov of prior year
@@ -713,6 +714,106 @@ def _make_area_chart(area_data, threshold, out_path):
     fig.tight_layout()
     fig.savefig(str(out_path), dpi=150)
     plt.close(fig)
+
+
+def select_area_calibrated_threshold(maps_dir, fire_raster, time_index, valid_mask,
+                                      wy_range=range(2018, 2020), track="trackA"):
+    """Select threshold that minimizes MSE between predicted and actual burned area.
+
+    Uses calibration-period water years to find the threshold where predicted
+    burned area (pixels above threshold) best matches actual burned area from
+    the fire raster, averaged across fire seasons.
+
+    Parameters
+    ----------
+    maps_dir : Path
+        Directory containing spatial_maps/track{A,B}/ GeoTIFFs.
+    fire_raster : array
+        Full fire raster (T, H, W).
+    time_index : array
+        Year-month strings for each timestep.
+    valid_mask : array
+        (H, W) boolean mask of valid pixels.
+    wy_range : range
+        Water years to use for calibration.
+    track : str
+        Track subdirectory ("trackA" or "trackB").
+
+    Returns
+    -------
+    threshold : float
+        Area-calibrated threshold.
+    diagnostics : dict
+        Per-threshold and per-WY diagnostics.
+    """
+    # Compute actual burned area per WY fire season
+    wy_actual = {}
+    for wy in wy_range:
+        burned = np.zeros((H, W), dtype=bool)
+        for m in [10, 11]:
+            ym = f"{wy-1:04d}-{m:02d}"
+            idx = np.searchsorted(time_index, ym)
+            if idx < len(time_index) and time_index[idx] == ym:
+                burned |= (fire_raster[idx] == 1)
+        for m in [6, 7, 8, 9]:
+            ym = f"{wy:04d}-{m:02d}"
+            idx = np.searchsorted(time_index, ym)
+            if idx < len(time_index) and time_index[idx] == ym:
+                burned |= (fire_raster[idx] == 1)
+        burned &= valid_mask
+        wy_actual[wy] = int(burned.sum())
+
+    # Load probability maps for calib WYs
+    wy_prob_maps = {}
+    for wy in wy_range:
+        tif_path = maps_dir / track / f"fire_prob_WY{wy}_fire_season.tif"
+        if tif_path.exists():
+            with rasterio.open(str(tif_path)) as src:
+                prob = src.read(1)
+            prob[prob == -9999.0] = 0.0
+            wy_prob_maps[wy] = prob
+
+    if not wy_prob_maps:
+        logger.warning("No calib-period spatial maps found for area threshold calibration")
+        return 0.05, {}
+
+    # Search for threshold minimizing area ratio error across calib WYs
+    thresholds = np.arange(0.01, 0.50, 0.005)
+    best_thresh = 0.05
+    best_mse = float("inf")
+    diagnostics = {"per_threshold": [], "per_wy_actual": wy_actual}
+
+    for thresh in thresholds:
+        ratios = []
+        squared_errors = []
+        for wy in sorted(wy_prob_maps.keys()):
+            pred_area = int(((wy_prob_maps[wy] >= thresh) & valid_mask).sum())
+            actual_area = wy_actual[wy]
+            if actual_area > 0:
+                ratio = pred_area / actual_area
+                ratios.append(ratio)
+                squared_errors.append((pred_area - actual_area) ** 2)
+
+        if ratios:
+            mean_ratio = np.mean(ratios)
+            mse = np.mean(squared_errors)
+            diagnostics["per_threshold"].append({
+                "threshold": float(thresh),
+                "mean_ratio": float(mean_ratio),
+                "mse": float(mse),
+            })
+            if mse < best_mse:
+                best_mse = mse
+                best_thresh = float(thresh)
+
+    logger.info(f"  Area-calibrated threshold: {best_thresh:.3f}")
+    for wy in sorted(wy_prob_maps.keys()):
+        pred = int(((wy_prob_maps[wy] >= best_thresh) & valid_mask).sum())
+        act = wy_actual[wy]
+        ratio = pred / act if act > 0 else float("inf")
+        logger.info(f"    WY{wy}: actual={act:,} km², predicted={pred:,} km², ratio={ratio:.2f}")
+
+    return best_thresh, diagnostics
 
 
 def main():
