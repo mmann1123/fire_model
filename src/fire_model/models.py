@@ -38,19 +38,21 @@ class FeatureTransformer(BaseEstimator, TransformerMixin):
     suffixed names ('cwd_cum6_anom_a' or '_b') based on feature_names.
     """
 
-    def __init__(self, feature_names, interactions=None):
-        self.feature_names = list(feature_names)
-        self.interactions = interactions or []
+    def __init__(self, feature_names=None, interactions=None):
+        self.feature_names = feature_names
+        self.interactions = interactions
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X):
-        if not self.interactions:
+        interactions = self.interactions or []
+        if not interactions:
             return X
-        idx = {n: i for i, n in enumerate(self.feature_names)}
+        feature_names = self.feature_names or []
+        idx = {n: i for i, n in enumerate(feature_names)}
         extras = []
-        for col_a, col_b, name in self.interactions:
+        for col_a, col_b, name in interactions:
             a = self._resolve(col_a, idx)
             b = self._resolve(col_b, idx)
             extras.append((X[:, a] * X[:, b]).reshape(-1, 1))
@@ -70,8 +72,8 @@ class FeatureTransformer(BaseEstimator, TransformerMixin):
         )
 
     def get_feature_names_out(self, input_features=None):
-        names = list(self.feature_names)
-        for _, _, name in self.interactions:
+        names = list(self.feature_names or [])
+        for _, _, name in (self.interactions or []):
             names.append(name)
         return names
 
