@@ -95,9 +95,13 @@ def load_frap_fires():
 
     gdf["ym"] = gdf["year"].astype(str).str.zfill(4) + "-" + gdf["month"].astype(str).str.zfill(2)
 
+    # Numeric incident ID for GroupKFold spatial leakage prevention
+    gdf["inc_id"] = gdf["INC_NUM"].astype("category").cat.codes + 1  # 0 = no fire
+
     logger.info(f"FRAP: {n_raw} raw -> {len(gdf)} filtered (CA, objective=1, >={MIN_ACRES} acres, 1984-2024)")
     logger.info(f"  Year range: {gdf['year'].min()}-{gdf['year'].max()}")
     logger.info(f"  Unique fire-months: {gdf['ym'].nunique()}")
+    logger.info(f"  Unique incidents (INC_NUM): {gdf['INC_NUM'].nunique()}")
     return gdf
 
 
@@ -113,33 +117,59 @@ def _rasterize_month(args):
     return time_idx, raster
 
 
+def _rasterize_month_with_inc(args):
+    """Worker: rasterize geometries for one month with incident IDs.
+
+    Returns (time_idx, binary_raster, inc_raster).
+    """
+    time_idx, geom_inc_pairs = args
+    from shapely import wkb
+    binary = np.zeros((H, W), dtype=np.uint8)
+    inc_raster = np.zeros((H, W), dtype=np.int32)
+    for wkb_bytes, inc_id in geom_inc_pairs:
+        geom = wkb.loads(wkb_bytes)
+        mask = rasterio.features.rasterize(
+            [(geom, 1)], out_shape=(H, W), transform=TRANSFORM,
+            fill=0, dtype="uint8", all_touched=True,
+        )
+        binary |= mask
+        inc_raster[mask == 1] = inc_id  # last writer wins
+    return time_idx, binary, inc_raster
+
+
 def build_fire_raster(gdf, time_index):
-    """Rasterize FRAP fires to monthly binary grid."""
+    """Rasterize FRAP fires to monthly binary grid + incident ID grid."""
     fire_raster_path = Path(OUTPUT_DIR) / "fire_raster.npy"
+    inc_raster_path = Path(OUTPUT_DIR) / "inc_num_raster.npy"
+    inc_lookup_path = Path(OUTPUT_DIR) / "inc_num_lookup.json"
 
     T = len(time_index)
     ym_to_idx = {ym: i for i, ym in enumerate(time_index)}
 
-    # Group fires by month
+    # Group fires by month with incident IDs
     fire_months = {}
     for ym, group in gdf.groupby("ym"):
         if ym in ym_to_idx:
-            # Serialize geometries for multiprocessing
-            geom_wkbs = [g.wkb for g in group.geometry]
-            fire_months[ym] = (ym_to_idx[ym], geom_wkbs)
+            geom_inc_pairs = [
+                (g.wkb, int(inc_id))
+                for g, inc_id in zip(group.geometry, group["inc_id"])
+            ]
+            fire_months[ym] = (ym_to_idx[ym], geom_inc_pairs)
 
     logger.info(f"Rasterizing {len(fire_months)} fire-months (of {T} total)...")
 
     fire_raster = np.zeros((T, H, W), dtype=np.uint8)
+    inc_num_raster = np.zeros((T, H, W), dtype=np.int32)
 
-    # Parallel rasterization
+    # Parallel rasterization with incident IDs
     tasks = list(fire_months.values())
     with ProcessPoolExecutor() as executor:
-        for time_idx, raster in tqdm(
-            executor.map(_rasterize_month, tasks),
+        for time_idx, binary, inc_r in tqdm(
+            executor.map(_rasterize_month_with_inc, tasks),
             total=len(tasks), desc="Rasterizing fires"
         ):
-            fire_raster[time_idx] = raster
+            fire_raster[time_idx] = binary
+            inc_num_raster[time_idx] = inc_r
 
     n_burned = int(fire_raster.sum())
     n_months_with_fire = int((fire_raster.sum(axis=(1, 2)) > 0).sum())
@@ -147,6 +177,19 @@ def build_fire_raster(gdf, time_index):
 
     np.save(str(fire_raster_path), fire_raster)
     logger.info(f"Saved fire_raster.npy ({fire_raster.nbytes / 1e6:.0f} MB)")
+
+    np.save(str(inc_raster_path), inc_num_raster)
+    logger.info(f"Saved inc_num_raster.npy ({inc_num_raster.nbytes / 1e6:.0f} MB)")
+
+    # Save inc_id -> INC_NUM lookup
+    inc_lookup = {
+        str(int(row["inc_id"])): str(row["INC_NUM"])
+        for _, row in gdf[["inc_id", "INC_NUM"]].drop_duplicates().iterrows()
+    }
+    with open(str(inc_lookup_path), "w") as f:
+        json.dump(inc_lookup, f, indent=2)
+    logger.info(f"Saved inc_num_lookup.json ({len(inc_lookup)} incidents)")
+
     return fire_raster
 
 
@@ -437,7 +480,8 @@ def main():
 
     # ---- 1a. Fire rasterization ----
     fire_raster_path = out_dir / "fire_raster.npy"
-    if fire_raster_path.exists() and not args.force:
+    inc_raster_path = out_dir / "inc_num_raster.npy"
+    if fire_raster_path.exists() and inc_raster_path.exists() and not args.force:
         logger.info("Loading existing fire_raster.npy")
         fire_raster_full = np.load(str(fire_raster_path))
     else:
@@ -528,6 +572,18 @@ def main():
     all_month = np.array([int(ym[5:7]) for ym in all_ym])
 
     logger.info(f"Total panel: {len(all_t)} rows ({n_pos} pos, {n_neg} neg, ratio 1:{n_neg//max(n_pos,1)})")
+
+    # ---- Extract incident IDs for GroupKFold ----
+    inc_num_raster_full = np.load(str(inc_raster_path))
+    inc_num_raster_fire = inc_num_raster_full[start_idx:]  # slice to 1984+
+    # Positive pixels: look up inc_id from raster; negatives: empty string
+    inc_ids = np.where(
+        all_fire == 1,
+        inc_num_raster_fire[all_t, all_r, all_c].astype(str),
+        ""
+    )
+    n_unique_inc = len(set(inc_ids[all_fire == 1]))
+    logger.info(f"Incident IDs: {n_unique_inc} unique incidents in positive samples")
 
     # ---- 1d. Feature extraction ----
     logger.info("Extracting features...")
@@ -714,6 +770,7 @@ def main():
         "row": all_r,
         "col": all_c,
         "fire": all_fire,
+        "inc_num": inc_ids,
         "split": split,
     })
     for feat_name, arr in features.items():

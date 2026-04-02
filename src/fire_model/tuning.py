@@ -2,18 +2,42 @@
 
 Usage:
     from src.fire_model.tuning import tune_model
-    best_params = tune_model("lightgbm", X_train, y_train, feature_names, cfg_model)
+    best_params = tune_model("lightgbm", X_train, y_train, df_train, feature_names, cfg_model)
 """
 
 import logging
 
 import numpy as np
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import GroupKFold, StratifiedKFold
 
 logger = logging.getLogger(__name__)
 
+# Model types that use GroupKFold (tree models susceptible to spatial leakage)
+USES_GROUP_KFOLD = {"lightgbm", "random_forest"}
 
-def tune_model(model_type, X_train, y_train, feature_names, cfg_model,
+
+def assign_cv_groups(df_train, n_spatial_blocks=20):
+    """Assign GroupKFold groups.
+
+    Positives grouped by inc_num (fire incident), negatives by spatial block.
+    """
+    groups = np.empty(len(df_train), dtype=object)
+    pos_mask = (df_train["fire"] == 1).values
+
+    # Positives: group by fire incident
+    groups[pos_mask] = df_train.loc[pos_mask, "inc_num"].astype(str).values
+
+    # Negatives: group by spatial block (grid of ~20x20 blocks)
+    neg_mask = ~pos_mask
+    row_block = (df_train.loc[neg_mask, "row"].values // max(1, 1209 // n_spatial_blocks)).astype(int)
+    col_block = (df_train.loc[neg_mask, "col"].values // max(1, 941 // n_spatial_blocks)).astype(int)
+    groups[neg_mask] = np.array([f"neg_{r}_{c}" for r, c in zip(row_block, col_block)])
+
+    return groups
+
+
+def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
                n_trials=100, cv_folds=3, tune_subsample=0.2, seed=42):
     """Run Optuna hyperparameter search.
 
@@ -24,6 +48,9 @@ def tune_model(model_type, X_train, y_train, feature_names, cfg_model,
         lightgbm, tabnet, ecoregion_logreg.
     X_train, y_train : arrays
         Training data (tuning uses a stratified subsample for tree/neural models).
+    df_train : DataFrame
+        Training DataFrame with 'fire', 'inc_num', 'row', 'col' columns.
+        Used for GroupKFold group assignment on tree models.
     feature_names : list[str]
         Feature column names.
     cfg_model : dict
@@ -49,7 +76,6 @@ def tune_model(model_type, X_train, y_train, feature_names, cfg_model,
     use_subsample = model_type in ("random_forest", "lightgbm", "tabnet")
     if use_subsample and tune_subsample < 1.0:
         rng = np.random.RandomState(seed)
-        n_sub = int(len(X_train) * tune_subsample)
         # Stratified subsample
         pos_idx = np.where(y_train == 1)[0]
         neg_idx = np.where(y_train == 0)[0]
@@ -61,30 +87,52 @@ def tune_model(model_type, X_train, y_train, feature_names, cfg_model,
         ])
         X_sub = X_train[sub_idx]
         y_sub = y_train[sub_idx]
+        df_sub = df_train.iloc[sub_idx].reset_index(drop=True)
         logger.info(f"Tuning with {len(X_sub)} samples ({tune_subsample:.0%} subsample)")
     else:
         X_sub = X_train
         y_sub = y_train
+        df_sub = df_train.reset_index(drop=True)
+        sub_idx = None
         logger.info(f"Tuning with full {len(X_sub)} samples")
 
-    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=seed)
+    # Build CV splits
+    use_group_kfold = model_type in USES_GROUP_KFOLD
+    if use_group_kfold:
+        groups = assign_cv_groups(df_sub, n_spatial_blocks=20)
+        cv = GroupKFold(n_splits=cv_folds)
+        splits = list(cv.split(X_sub, y_sub, groups=groups))
+        logger.info(f"Using GroupKFold ({cv_folds} folds) — grouping by INC_NUM for positives, spatial block for negatives")
+        for fold_i, (tr_idx, val_idx) in enumerate(splits):
+            n_pos_val = y_sub[val_idx].sum()
+            n_groups_val = len(set(groups[val_idx]))
+            logger.info(f"  Fold {fold_i+1}: {len(val_idx):,} val rows, "
+                        f"{int(n_pos_val):,} positive, {n_groups_val} groups")
+    else:
+        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=seed)
+        splits = list(cv.split(X_sub, y_sub))
+        logger.info(f"Using StratifiedKFold ({cv_folds} folds)")
 
     def objective(trial):
         from src.fire_model.models import build_model
 
         params = _suggest_params(trial, model_type, cfg_model)
-        # Merge suggested params with base config
         trial_cfg = {**cfg_model, **params, "type": model_type}
-        model = build_model(trial_cfg, feature_names, seed=seed)
+        # Force CPU during tuning to avoid GPU segfaults with extreme param combos
+        if model_type in ("lightgbm",):
+            trial_cfg["device"] = "cpu"
 
-        try:
-            scores = cross_val_score(
-                model, X_sub, y_sub, cv=cv, scoring="roc_auc", n_jobs=-1
-            )
-            return scores.mean()
-        except Exception as e:
-            logger.warning(f"Trial {trial.number} failed: {e}")
-            return 0.0
+        fold_aucs = []
+        for train_idx, val_idx in splits:
+            try:
+                model = build_model(trial_cfg, feature_names, seed=seed)
+                model.fit(X_sub[train_idx], y_sub[train_idx])
+                prob = model.predict_proba(X_sub[val_idx])[:, 1]
+                fold_aucs.append(roc_auc_score(y_sub[val_idx], prob))
+            except Exception as e:
+                logger.warning(f"Trial {trial.number} fold failed: {e}")
+                return 0.0
+        return np.mean(fold_aucs)
 
     study = optuna.create_study(
         direction="maximize",

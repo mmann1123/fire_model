@@ -25,11 +25,11 @@ MASTER_LOG="${LOG_DIR}/run_all_models_${TIMESTAMP}.log"
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$MASTER_LOG"; }
 
 # ============================================================
-# 0. Rebuild panel (matched_ratio sampling)
+# 0. Rebuild panel (with inc_num for GroupKFold)
 # ============================================================
-log "=== Step 0: Rebuilding panel ==="
-$CONDA python scripts/01_build_panel.py 2>&1 | tee -a "$MASTER_LOG"
-log "Panel build complete."
+#log "=== Step 0: Rebuilding panel ==="
+#$CONDA python scripts/01_build_panel.py --force 2>&1 | tee -a "$MASTER_LOG"
+#log "Panel build complete."
 
 # ============================================================
 # Helper: train + evaluate + snapshot one model
@@ -66,49 +66,49 @@ run_model() {
 }
 
 # ============================================================
-# 1. Baseline logistic regression (no tuning — reproduce v3)
+# 1. Baseline logistic regression (no tuning — reference)
 # ============================================================
 run_model "logistic_regression" \
     "v4-logreg-baseline" \
     "Baseline LogReg via new modular framework, verify matches v3-matched-ratio"
 
 # ============================================================
-# 2. ElasticNet logistic regression (with tuning)
+# 2. ElasticNet logistic regression (with tuning, StratifiedKFold)
 # ============================================================
 run_model "elasticnet_logreg" \
-    "v5-elasticnet" \
-    "ElasticNet LogReg with Optuna tuning, default params (no interactions)" \
+    "v5-elasticnet-fix" \
+    "ElasticNet LogReg with Optuna tuning, manual CV loop (clone bug fixed)" \
     --tune --n-trials 100 --cv-folds 3
 
 # ============================================================
-# 3. Random Forest (with tuning)
+# 3. LightGBM (with tuning, GroupKFold by INC_NUM)
 # ============================================================
-run_model "random_forest" \
-    "v6-random-forest" \
-    "RandomForest with Optuna tuning, 20% subsample" \
+run_model "lightgbm" \
+    "v7-lgbm-groupkfold" \
+    "LightGBM GPU with Optuna tuning, GroupKFold by INC_NUM" \
     --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
 
 # ============================================================
-# 4. LightGBM (with tuning)
+# 4. Random Forest (with tuning, GroupKFold by INC_NUM)
 # ============================================================
-run_model "lightgbm" \
-    "v7-lightgbm" \
-    "LightGBM GPU with Optuna tuning, 20% subsample" \
+run_model "random_forest" \
+    "v8-rf-groupkfold" \
+    "RandomForest with Optuna tuning, GroupKFold by INC_NUM" \
     --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
 
 # ============================================================
 # 5. TabNet (with tuning)
 # ============================================================
 run_model "tabnet" \
-    "v8-tabnet" \
+    "v9-tabnet" \
     "TabNet GPU with Optuna tuning, 20% subsample" \
     --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
 
 # ============================================================
-# 6. Ecoregion LogReg (with tuning)
+# 6. Ecoregion LogReg (with tuning, StratifiedKFold)
 # ============================================================
 run_model "ecoregion_logreg" \
-    "v9-ecoregion-logreg" \
+    "v10-ecoregion" \
     "Per-ecoregion LogReg with Optuna tuning" \
     --tune --n-trials 50 --cv-folds 3
 
@@ -127,11 +127,11 @@ from pathlib import Path
 snap_dir = Path('snapshots')
 runs = [
     'v4-logreg-baseline',
-    'v5-elasticnet',
-    'v6-random-forest',
-    'v7-lightgbm',
-    'v8-tabnet',
-    'v9-ecoregion-logreg',
+    'v5-elasticnet-fix',
+    'v7-lgbm-groupkfold',
+    'v8-rf-groupkfold',
+    'v9-tabnet',
+    'v10-ecoregion',
 ]
 
 print(f'{\"Run ID\":<25s} {\"AUC-A\":>8s} {\"AUC-B\":>8s} {\"Delta\":>8s}')

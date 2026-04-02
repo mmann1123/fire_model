@@ -74,7 +74,7 @@ def train_track(df_train, df_calib, features, track_name, cfg_model, seed,
     if tune:
         from src.fire_model.tuning import tune_model
         best_params = tune_model(
-            model_type, X_train, y_train, features, cfg_model,
+            model_type, X_train, y_train, df_train, features, cfg_model,
             n_trials=n_trials, cv_folds=cv_folds,
             tune_subsample=tune_subsample, seed=seed,
         )
