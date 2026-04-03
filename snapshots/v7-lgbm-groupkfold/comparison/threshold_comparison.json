@@ -1,0 +1,5 @@
+{
+  "rate_match_threshold": 0.193,
+  "area_calib_threshold": 0.15999999999999998,
+  "area_calib_wy_range": "WY2018-WY2019"
+}

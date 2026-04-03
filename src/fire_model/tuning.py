@@ -118,9 +118,7 @@ def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
 
         params = _suggest_params(trial, model_type, cfg_model)
         trial_cfg = {**cfg_model, **params, "type": model_type}
-        # Force CPU during tuning to avoid GPU segfaults with extreme param combos
-        if model_type in ("lightgbm",):
-            trial_cfg["device"] = "cpu"
+        # GPU OK now that num_leaves is capped at 127 (was 255)
 
         fold_aucs = []
         for train_idx, val_idx in splits:
@@ -175,7 +173,7 @@ def _suggest_params(trial, model_type, cfg_model):
 
     elif model_type == "lightgbm":
         return {
-            "num_leaves": trial.suggest_int("num_leaves", 15, 255),
+            "num_leaves": trial.suggest_int("num_leaves", 15, 127),
             "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
             "n_estimators": trial.suggest_int("n_estimators", 100, 2000, step=100),
             "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),

@@ -68,17 +68,19 @@ run_model() {
 # ============================================================
 # 1. Baseline logistic regression (no tuning — reference)
 # ============================================================
-run_model "logistic_regression" \
-    "v4-logreg-baseline" \
-    "Baseline LogReg via new modular framework, verify matches v3-matched-ratio"
+# SKIP — already completed (v4-logreg-baseline snapshot exists)
+# run_model "logistic_regression" \
+#     "v4-logreg-baseline" \
+#     "Baseline LogReg via new modular framework, verify matches v3-matched-ratio"
 
 # ============================================================
 # 2. ElasticNet logistic regression (with tuning, StratifiedKFold)
 # ============================================================
-run_model "elasticnet_logreg" \
-    "v5-elasticnet-fix" \
-    "ElasticNet LogReg with Optuna tuning, manual CV loop (clone bug fixed)" \
-    --tune --n-trials 100 --cv-folds 3
+# SKIP — already completed (v5-elasticnet-fix snapshot exists)
+# run_model "elasticnet_logreg" \
+#     "v5-elasticnet-fix" \
+#     "ElasticNet LogReg with Optuna tuning, manual CV loop (clone bug fixed)" \
+#     --tune --n-trials 100 --cv-folds 3
 
 # ============================================================
 # 3. LightGBM (with tuning, GroupKFold by INC_NUM)
