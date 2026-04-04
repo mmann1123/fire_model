@@ -164,8 +164,8 @@ def _suggest_params(trial, model_type, cfg_model):
 
     elif model_type == "random_forest":
         return {
-            "n_estimators": trial.suggest_int("n_estimators", 100, 1000, step=100),
-            "max_depth": trial.suggest_int("max_depth", 5, 30),
+            "n_estimators": trial.suggest_int("n_estimators", 100, 500, step=100),
+            "max_depth": trial.suggest_int("max_depth", 5, 20),
             "min_samples_leaf": trial.suggest_int("min_samples_leaf", 5, 50),
             "max_features": trial.suggest_categorical("max_features",
                                                        ["sqrt", "log2", 0.3, 0.5, 0.8]),

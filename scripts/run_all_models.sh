@@ -85,18 +85,20 @@ run_model() {
 # ============================================================
 # 3. LightGBM (with tuning, GroupKFold by INC_NUM)
 # ============================================================
-run_model "lightgbm" \
-    "v7-lgbm-groupkfold" \
-    "LightGBM GPU with Optuna tuning, GroupKFold by INC_NUM" \
-    --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
+# SKIP — already completed (v7-lgbm-groupkfold snapshot exists)
+# run_model "lightgbm" \
+#     "v7-lgbm-groupkfold" \
+#     "LightGBM GPU with Optuna tuning, GroupKFold by INC_NUM" \
+#     --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
 
 # ============================================================
 # 4. Random Forest (with tuning, GroupKFold by INC_NUM)
 # ============================================================
-run_model "random_forest" \
-    "v8-rf-groupkfold" \
-    "RandomForest with Optuna tuning, GroupKFold by INC_NUM" \
-    --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
+# SKIP — already completed (v8-rf-groupkfold snapshot exists)
+# run_model "random_forest" \
+#     "v8-rf-groupkfold" \
+#     "RandomForest with Optuna tuning, GroupKFold by INC_NUM" \
+#     --tune --n-trials 30 --cv-folds 3 --tune-subsample 0.2
 
 # ============================================================
 # 5. TabNet (with tuning)
@@ -104,7 +106,7 @@ run_model "random_forest" \
 run_model "tabnet" \
     "v9-tabnet" \
     "TabNet GPU with Optuna tuning, 20% subsample" \
-    --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
+    --tune --n-trials 30 --cv-folds 3 --tune-subsample 0.2
 
 # ============================================================
 # 6. Ecoregion LogReg (with tuning, StratifiedKFold)
@@ -112,7 +114,7 @@ run_model "tabnet" \
 run_model "ecoregion_logreg" \
     "v10-ecoregion" \
     "Per-ecoregion LogReg with Optuna tuning" \
-    --tune --n-trials 50 --cv-folds 3
+    --tune --n-trials 20 --cv-folds 3
 
 # ============================================================
 # Summary: compare all runs

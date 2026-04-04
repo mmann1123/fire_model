@@ -111,7 +111,7 @@ class TabNetWrapper(BaseEstimator, ClassifierMixin):
         self.classes_ = np.array([0, 1])
 
     def fit(self, X, y, eval_set=None):
-        from pytorch_tabnet.tab_model import TabNetClassifier
+        from pytorch_tabnet.tab_models import TabNetClassifier
 
         self.model_ = TabNetClassifier(
             n_d=self.n_d, n_a=self.n_a,

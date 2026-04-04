@@ -1,0 +1,85 @@
+{
+  "run_date": "2026-04-03T18:16:33",
+  "git_hash": "4688a979a92e",
+  "frap_filter": {
+    "state": "CA",
+    "objective": 1,
+    "min_acres": 300
+  },
+  "train_period": "1984-01 to 2016-12",
+  "calib_period": "2016-01 to 2019-09",
+  "test_period": "2019-10 to 2024-09",
+  "sampling": {
+    "seed": 42,
+    "min_fire_acres": 300,
+    "strategy": "grid_thin",
+    "grid_thin": {
+      "neg_grid_spacing": 5
+    },
+    "matched_ratio": {
+      "target_ratio": 10
+    },
+    "temporal_thin": {
+      "neg_grid_spacing": 5,
+      "month_step": 3
+    },
+    "random_subsample": {
+      "fraction": 0.01
+    }
+  },
+  "feature_cols": [
+    "ppt",
+    "tmin",
+    "tmax",
+    "vpd",
+    "srad",
+    "kbdi",
+    "sws",
+    "vpd_roll6_std",
+    "month_sin",
+    "month_cos",
+    "fire_season",
+    "elev",
+    "aridity_index",
+    "windward_index",
+    "fveg_forest",
+    "fveg_shrub",
+    "fveg_herb",
+    "tsf_years",
+    "tsf_log",
+    "tst_broadcast_years",
+    "tst_mechanical_years",
+    "any_treatment_5yr",
+    "dist_campground_km",
+    "dist_transmission_km",
+    "dist_airbase_km",
+    "dist_firestation_km",
+    "dist_road_km",
+    "housing_density",
+    "log_housing_density",
+    "cwd_anom_a",
+    "aet_anom_a",
+    "pet_anom_a",
+    "cwd_cum3_anom_a",
+    "cwd_cum6_anom_a"
+  ],
+  "n_train_pos": 87018,
+  "n_train_neg": 7621925,
+  "n_calib_pos": 17386,
+  "n_test_pos": 42949,
+  "n_test_neg": 1153655,
+  "trackA_overall_auc": 0.9445311071143306,
+  "trackB_overall_auc": 0.9406677131325745,
+  "auc_delta": 0.003863393981756169,
+  "threshold_rate_match": 0.169,
+  "threshold_area_calib": 0.145,
+  "tsf_log_coef_trackA": 0.0142349603783157,
+  "tsf_years_coef_trackA": 0.016576146360508,
+  "tsf_log_coef_trackB": 0.0142349603783157,
+  "tsf_years_coef_trackB": 0.016576146360508,
+  "snapshot": {
+    "run_id": "v8-rf-groupkfold",
+    "notes": "RandomForest with Optuna tuning, GroupKFold by INC_NUM",
+    "git_hash": "4688a979a92e"
+  }
+}
