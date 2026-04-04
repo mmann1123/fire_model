@@ -9,32 +9,47 @@ import logging
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import GroupKFold, StratifiedKFold
+from sklearn.model_selection import StratifiedKFold
 
 logger = logging.getLogger(__name__)
 
-# Model types that use GroupKFold (tree models susceptible to spatial leakage)
-USES_GROUP_KFOLD = {"lightgbm", "random_forest"}
+# Model types that use forward-chaining temporal CV
+USES_TEMPORAL_CV = {"lightgbm", "random_forest", "tabnet"}
+
+# Forward-chaining temporal folds over training period (1984-2016)
+# Each fold trains on all prior years, validates on a held-out window.
+TEMPORAL_FOLDS = [
+    (range(1984, 1990), range(1990, 1992)),
+    (range(1984, 1996), range(1996, 1998)),
+    (range(1984, 2002), range(2002, 2004)),
+    (range(1984, 2008), range(2008, 2010)),
+    (range(1984, 2014), range(2014, 2017)),
+]
 
 
-def assign_cv_groups(df_train, n_spatial_blocks=20):
-    """Assign GroupKFold groups.
+def build_temporal_cv_splits(df, folds=TEMPORAL_FOLDS):
+    """Forward-chaining temporal CV splits.
 
-    Positives grouped by inc_num (fire incident), negatives by spatial block.
+    Each fold holds out 2-3 complete water years.
+    Preserves temporal ordering — no future data leaks into training.
+
+    Returns list of (train_idx, val_idx) tuples.
     """
-    groups = np.empty(len(df_train), dtype=object)
-    pos_mask = (df_train["fire"] == 1).values
+    years = df["year"].values
+    splits = []
 
-    # Positives: group by fire incident
-    groups[pos_mask] = df_train.loc[pos_mask, "inc_num"].astype(str).values
+    for train_years, val_years in folds:
+        train_mask = np.isin(years, list(train_years))
+        val_mask = np.isin(years, list(val_years))
 
-    # Negatives: group by spatial block (grid of ~20x20 blocks)
-    neg_mask = ~pos_mask
-    row_block = (df_train.loc[neg_mask, "row"].values // max(1, 1209 // n_spatial_blocks)).astype(int)
-    col_block = (df_train.loc[neg_mask, "col"].values // max(1, 941 // n_spatial_blocks)).astype(int)
-    groups[neg_mask] = np.array([f"neg_{r}_{c}" for r, c in zip(row_block, col_block)])
+        if val_mask.sum() == 0:
+            continue
 
-    return groups
+        train_idx = np.where(train_mask)[0]
+        val_idx = np.where(val_mask)[0]
+        splits.append((train_idx, val_idx))
+
+    return splits
 
 
 def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
@@ -49,8 +64,8 @@ def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
     X_train, y_train : arrays
         Training data (tuning uses a stratified subsample for tree/neural models).
     df_train : DataFrame
-        Training DataFrame with 'fire', 'inc_num', 'row', 'col' columns.
-        Used for GroupKFold group assignment on tree models.
+        Training DataFrame with 'fire', 'year', 'row', 'col' columns.
+        Used for temporal CV splits on tree models.
     feature_names : list[str]
         Feature column names.
     cfg_model : dict
@@ -58,7 +73,7 @@ def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
     n_trials : int
         Number of Optuna trials.
     cv_folds : int
-        Number of CV folds for evaluation.
+        Number of CV folds for evaluation (used by StratifiedKFold only).
     tune_subsample : float
         Fraction of training data to use for tuning (tree/neural models only).
     seed : int
@@ -72,11 +87,15 @@ def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    # Subsample for expensive models
-    use_subsample = model_type in ("random_forest", "lightgbm", "tabnet")
-    if use_subsample and tune_subsample < 1.0:
+    use_temporal = model_type in USES_TEMPORAL_CV
+
+    # Subsample for expensive models (only for non-temporal CV;
+    # temporal CV needs full years to preserve temporal structure)
+    use_subsample = (not use_temporal
+                     and model_type in ("random_forest", "lightgbm", "tabnet")
+                     and tune_subsample < 1.0)
+    if use_subsample:
         rng = np.random.RandomState(seed)
-        # Stratified subsample
         pos_idx = np.where(y_train == 1)[0]
         neg_idx = np.where(y_train == 0)[0]
         n_pos = int(len(pos_idx) * tune_subsample)
@@ -89,25 +108,41 @@ def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
         y_sub = y_train[sub_idx]
         df_sub = df_train.iloc[sub_idx].reset_index(drop=True)
         logger.info(f"Tuning with {len(X_sub)} samples ({tune_subsample:.0%} subsample)")
+    elif use_temporal and tune_subsample < 1.0:
+        # For temporal CV, subsample within each year to preserve temporal structure
+        rng = np.random.RandomState(seed)
+        keep = []
+        for yr in df_train["year"].unique():
+            yr_idx = np.where(df_train["year"].values == yr)[0]
+            pos_mask = y_train[yr_idx] == 1
+            pos_in_yr = yr_idx[pos_mask]
+            neg_in_yr = yr_idx[~pos_mask]
+            n_pos = max(1, int(len(pos_in_yr) * tune_subsample))
+            n_neg = int(len(neg_in_yr) * tune_subsample)
+            keep.append(pos_in_yr if len(pos_in_yr) <= n_pos
+                        else rng.choice(pos_in_yr, n_pos, replace=False))
+            keep.append(rng.choice(neg_in_yr, min(n_neg, len(neg_in_yr)), replace=False))
+        sub_idx = np.sort(np.concatenate(keep))
+        X_sub = X_train[sub_idx]
+        y_sub = y_train[sub_idx]
+        df_sub = df_train.iloc[sub_idx].reset_index(drop=True)
+        logger.info(f"Tuning with {len(X_sub)} samples "
+                    f"({tune_subsample:.0%} stratified subsample per year)")
     else:
         X_sub = X_train
         y_sub = y_train
         df_sub = df_train.reset_index(drop=True)
-        sub_idx = None
         logger.info(f"Tuning with full {len(X_sub)} samples")
 
     # Build CV splits
-    use_group_kfold = model_type in USES_GROUP_KFOLD
-    if use_group_kfold:
-        groups = assign_cv_groups(df_sub, n_spatial_blocks=20)
-        cv = GroupKFold(n_splits=cv_folds)
-        splits = list(cv.split(X_sub, y_sub, groups=groups))
-        logger.info(f"Using GroupKFold ({cv_folds} folds) — grouping by INC_NUM for positives, spatial block for negatives")
+    if use_temporal:
+        splits = build_temporal_cv_splits(df_sub)
+        logger.info(f"Using forward-chaining temporal CV ({len(splits)} folds)")
         for fold_i, (tr_idx, val_idx) in enumerate(splits):
             n_pos_val = y_sub[val_idx].sum()
-            n_groups_val = len(set(groups[val_idx]))
-            logger.info(f"  Fold {fold_i+1}: {len(val_idx):,} val rows, "
-                        f"{int(n_pos_val):,} positive, {n_groups_val} groups")
+            val_years = sorted(df_sub.iloc[val_idx]["year"].unique())
+            logger.info(f"  Fold {fold_i+1}: val years {min(val_years)}-{max(val_years)}, "
+                        f"{len(val_idx):,} val rows, {int(n_pos_val):,} positive")
     else:
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=seed)
         splits = list(cv.split(X_sub, y_sub))
@@ -118,19 +153,24 @@ def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
 
         params = _suggest_params(trial, model_type, cfg_model)
         trial_cfg = {**cfg_model, **params, "type": model_type}
-        # GPU OK now that num_leaves is capped at 127 (was 255)
 
         fold_aucs = []
+        weights = []
         for train_idx, val_idx in splits:
             try:
                 model = build_model(trial_cfg, feature_names, seed=seed)
                 model.fit(X_sub[train_idx], y_sub[train_idx])
                 prob = model.predict_proba(X_sub[val_idx])[:, 1]
-                fold_aucs.append(roc_auc_score(y_sub[val_idx], prob))
+                auc = roc_auc_score(y_sub[val_idx], prob)
+                n_pos = y_sub[val_idx].sum()
+                fold_aucs.append(auc * n_pos)
+                weights.append(n_pos)
             except Exception as e:
                 logger.warning(f"Trial {trial.number} fold failed: {e}")
                 return 0.0
-        return np.mean(fold_aucs)
+
+        # Weighted mean AUC (weight by fire count per fold)
+        return sum(fold_aucs) / sum(weights) if weights else 0.0
 
     study = optuna.create_study(
         direction="maximize",
@@ -138,7 +178,7 @@ def tune_model(model_type, X_train, y_train, df_train, feature_names, cfg_model,
         pruner=optuna.pruners.MedianPruner() if model_type == "tabnet" else optuna.pruners.NopPruner(),
     )
 
-    logger.info(f"Starting Optuna: {n_trials} trials, {cv_folds}-fold CV, model={model_type}")
+    logger.info(f"Starting Optuna: {n_trials} trials, model={model_type}")
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
     best = study.best_params

@@ -25,7 +25,7 @@ MASTER_LOG="${LOG_DIR}/run_all_models_${TIMESTAMP}.log"
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$MASTER_LOG"; }
 
 # ============================================================
-# 0. Rebuild panel (with inc_num for GroupKFold)
+# 0. Rebuild panel
 # ============================================================
 #log "=== Step 0: Rebuilding panel ==="
 #$CONDA python scripts/01_build_panel.py --force 2>&1 | tee -a "$MASTER_LOG"
@@ -83,30 +83,28 @@ run_model() {
 #     --tune --n-trials 100 --cv-folds 3
 
 # ============================================================
-# 3. LightGBM (with tuning, GroupKFold by INC_NUM)
+# 3. LightGBM (with tuning, temporal CV)
 # ============================================================
-# SKIP — already completed (v7-lgbm-groupkfold snapshot exists)
-# run_model "lightgbm" \
-#     "v7-lgbm-groupkfold" \
-#     "LightGBM GPU with Optuna tuning, GroupKFold by INC_NUM" \
-#     --tune --n-trials 100 --cv-folds 3 --tune-subsample 0.2
+run_model "lightgbm" \
+    "v7-lgbm-temporal" \
+    "LightGBM GPU with Optuna tuning, forward-chaining temporal CV" \
+    --tune --n-trials 100 --tune-subsample 0.2
 
 # ============================================================
-# 4. Random Forest (with tuning, GroupKFold by INC_NUM)
+# 4. Random Forest (with tuning, temporal CV)
 # ============================================================
-# SKIP — already completed (v8-rf-groupkfold snapshot exists)
-# run_model "random_forest" \
-#     "v8-rf-groupkfold" \
-#     "RandomForest with Optuna tuning, GroupKFold by INC_NUM" \
-#     --tune --n-trials 30 --cv-folds 3 --tune-subsample 0.2
+run_model "random_forest" \
+    "v8-rf-temporal" \
+    "RandomForest with Optuna tuning, forward-chaining temporal CV" \
+    --tune --n-trials 100 --tune-subsample 0.2
 
 # ============================================================
-# 5. TabNet (with tuning)
+# 5. TabNet (with tuning, temporal CV)
 # ============================================================
 run_model "tabnet" \
     "v9-tabnet" \
-    "TabNet GPU with Optuna tuning, 20% subsample" \
-    --tune --n-trials 30 --cv-folds 3 --tune-subsample 0.2
+    "TabNet GPU with Optuna tuning, forward-chaining temporal CV" \
+    --tune --n-trials 30 --tune-subsample 0.2
 
 # ============================================================
 # 6. Ecoregion LogReg (with tuning, StratifiedKFold)
@@ -132,8 +130,8 @@ snap_dir = Path('snapshots')
 runs = [
     'v4-logreg-baseline',
     'v5-elasticnet-fix',
-    'v7-lgbm-groupkfold',
-    'v8-rf-groupkfold',
+    'v7-lgbm-temporal',
+    'v8-rf-temporal',
     'v9-tabnet',
     'v10-ecoregion',
 ]
